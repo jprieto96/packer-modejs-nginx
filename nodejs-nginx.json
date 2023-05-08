@@ -1,0 +1,92 @@
+{
+  "variables": {
+    "aws_access_key": "{{ env `AWS_ACCESS_KEY` }}",
+    "aws_secret_key": "{{ env `AWS_SECRET_KEY` }}",
+    "aws_region": "eu-west-3",
+    "image_naming": "nodejs-nginx",
+    "username": "jprieto96"
+  },
+  "builders": [
+    {
+      "type": "amazon-ebs",
+      "access_key": "{{ user `aws_access_key` }}",
+      "secret_key": "{{ user `aws_secret_key` }}",
+      "source_ami_filter": {
+        "filters": {
+          "virtualization-type": "hvm",
+          "name": "ubuntu/images/*ubuntu-bionic-18.04-amd64-server-*",
+          "root-device-type": "ebs"
+        },
+        "owners": [
+          "099720109477"
+        ],
+        "most_recent": true
+      },
+      "ami_name": "{{ user `image_naming` }}-{{ timestamp }}",
+      "instance_type": "t2.micro",
+      "ssh_username": "ubuntu",
+      "region": "{{ user `aws_region` }}"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "cd ~",
+        "curl -sL https://deb.nodesource.com/setup_14.x -o nodesource_setup.sh",
+        "sudo bash nodesource_setup.sh",
+        "sudo apt install nodejs -y",
+        "sudo apt install build-essential -y"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "hello.js",
+      "destination": "~/hello.js"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sudo apt install nginx -y",
+        "sudo npm install pm2@latest -g",
+        "sudo pm2 start ~/hello.js",
+        "sudo pm2 startup",
+        "sudo pm2 save"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "default",
+      "destination": "/tmp/default"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sudo mv /tmp/default /etc/nginx/sites-available/default",
+        "sudo systemctl restart nginx"
+      ]
+    }
+  ],
+  "post-processors": [
+    {
+      "type": "shell-local",
+      "inline": [
+        "curl 'https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip' -o 'awscliv2.zip'",
+        "sudo apt install unzip",
+        "unzip -o awscliv2.zip",
+        "sudo ./aws/install --update",
+        "aws configure set aws_access_key_id {{ user `aws_access_key` }}",
+        "aws configure set aws_secret_access_key {{ user `aws_secret_key` }}",
+        "aws configure set default.region {{ user `aws_region` }}",
+        "aws configure set default.output json",
+        "vpcid=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)",
+        "aws ec2 create-security-group --group-name packer-sec-group --description 'packer-sec-group' --vpc-id $vpcid",
+        "secgroup=$(aws ec2 describe-security-groups --group-names packer-sec-group --query 'SecurityGroups[0].GroupId' --output text)",
+        "aws ec2 authorize-security-group-ingress --group-id $secgroup --protocol tcp --port 3000 --cidr 0.0.0.0/0",
+        "aws ec2 authorize-security-group-ingress --group-id $secgroup --protocol tcp --port 80 --cidr 0.0.0.0/0",
+        "ami=$(aws ec2 describe-images --filters 'Name=name,Values=nodejs-nginx*' --query 'Images[0].ImageId' --output text)",
+        "aws ec2 run-instances --image-id $ami --count 1 --instance-type t2.micro --security-group-ids $secgroup"
+      ]
+    }
+  ]
+}
